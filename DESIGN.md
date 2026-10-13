@@ -5,7 +5,7 @@
 
 The primary goal of the game is to make it to the end as fast as possible using **phase dashes** and **rocket jumps** to make it past obstacles.  
 
-You lose if you hit too many obstacles (depends on the level difficulty)
+You lose if you take too long. (depends on the level difficulty)
 
 Going to the sides is controlled by A and D, jumping uses the Spacebar, phase dashing uses Shift and launching a rocket uses X.
 
