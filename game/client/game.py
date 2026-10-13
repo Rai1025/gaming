@@ -1,315 +1,402 @@
-"""
-Pygame platformer: run, jump, ROCKET JUMP (left click) and PHASE DASH (Left Shift).
-Goal: reach the flag as fast as you can. Press R to restart.
 
-Controls:  A/D or arrows = move   Space/W/Up = jump (hold for higher)
-           Left click   = rocket jump (launches you AWAY from the cursor)
-           Left Shift   = phase dash (horizontal, passes through purple walls)
-"""
+#Controls
+#W/S or Up/Down = choose   Enter/Space = play   Esc = quit
+#A/D or arrows = move   Space/W/Up = jump
+#Left click = rocket jump
+#Left Shift = phase dash
+#R = restart level   Esc or P = pause
+#Esc or P = resume   R = restart   M = back to level select
+#N = next level   R = retry   M or Esc = level select
+
 import math
+import os
 import sys
 import pygame
 
+# General setup
 pygame.init()
-
-# =====================================================================
-# 1. SETUP
-# =====================================================================
 WIDTH, HEIGHT = 800, 450
+TILE = 50
+FPS = 60
 screen = pygame.display.set_mode((WIDTH, HEIGHT))
-pygame.display.set_caption("Pygame Platformer: Rocket + Phase Dash")
+pygame.display.set_caption("Pygame Platformer")
 clock = pygame.time.Clock()
 font = pygame.font.SysFont(None, 28)
-FPS = 60
+small_font = pygame.font.SysFont(None, 22)
+big_font = pygame.font.SysFont(None, 64)
 
-# =====================================================================
-# 2. TUNING CONSTANTS: change these to change the "feel"
-# =====================================================================
-# --- basic movement ---
-GRAVITY = 1800         # px/s^2, added to vel.y each second (positive = down)
-MAX_FALL = 900         # terminal velocity
-MOVE_SPEED = 260       # normal top horizontal speed
-ACCEL = 2000           # speed gained per second while holding a direction
-FRICTION = 2400        # speed lost per second on the ground with no input
-AIR_FRICTION = 500     # speed lost per second in the air with no input (lower = floatier)
-JUMP_SPEED = 680       # upward speed at takeoff
-JUMP_CUT = 0.45        # releasing jump early multiplies upward speed by this
-COYOTE_TIME = 0.1      # grace period for jumping after leaving a ledge
-JUMP_BUFFER = 0.12     # an early jump press is remembered for this long
+LEVEL_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "levels")
 
-# --- rocket jump ---
-ROCKET_SPEED = 750     # speed given by the launch
-ROCKET_COOLDOWN = 0.5  # seconds between rockets
-BOOST_DRAG = 700       # how fast speed ABOVE MOVE_SPEED bleeds off while steering
-
-# --- phase dash ---
-DASH_SPEED = 700       # fixed speed during the dash
-DASH_TIME = 0.18       # dash duration (distance is about DASH_SPEED * DASH_TIME = 126 px)
-
+MOVE_SPEED = 260
+GRAVITY = 1800
+MAX_FALL = 900
+JUMP_SPEED = 680
+JUMP_CUT = 0.45
+GROUND_DRAG = 2400
+AIR_DRAG = 500
+ROCKET_SPEED = 750
+ROCKET_COOLDOWN = 0.5
+DASH_SPEED = 700
+DASH_TIME = 0.18
 JUMP_KEYS = (pygame.K_SPACE, pygame.K_w, pygame.K_UP)
 
-# =====================================================================
-# 3. LEVEL
-# =====================================================================
-# 1 = solid tile   2 = thin phase wall (dash can pass through)   G = goal flag
-TILE = 50
-LEVEL = [
-    "................",
-    "................",
-    "..............G.",
-    "......2.....1111",
-    "......2.........",
-    "......2.........",
-    "......2.........",
-    "1111111111111111",
-    "1111111111111111",
-]
-LEVEL_W = len(LEVEL[0]) * TILE
+# Colors
+SKY = (127, 178, 229)
+INK = (20, 25, 40)
+WHITE = (255, 255, 255)
+RED = (200, 50, 50)
+GOLD = (242, 193, 78)
 
-tiles, phase_tiles, goal = [], [], None
-for row, line in enumerate(LEVEL):
-    for col, ch in enumerate(line):
-        x, y = col * TILE, row * TILE
-        if ch == "1":
-            tiles.append(pygame.Rect(x, y, TILE, TILE))
-        elif ch == "2":
-            # Phase walls are drawn thin (a third of a tile) so they read as "thin".
-            phase_tiles.append(pygame.Rect(x + TILE // 3, y, TILE // 3, TILE))
-        elif ch == "G":
-            goal = pygame.Rect(x + 10, y, TILE - 20, TILE)
+# Levels loaded from a separate file
+def pretty_name(filename):
+    return os.path.splitext(filename)[0].replace("_", " ").title()
+class Level:
+
+    def __init__(self, filename):
+        self.filename = filename
+        self.name = pretty_name(filename)
+        self.tiles = []
+        self.phase_tiles = []
+        self.goal = None
+        self.spawn = None
+
+        with open(os.path.join(LEVEL_DIR, filename), encoding="utf-8") as f:
+            lines = [line.rstrip() for line in f]
+        rows = [line for line in lines if line and not line.startswith(";")]
+        self.width = max(len(line) for line in rows) * TILE
+        self.height = len(rows) * TILE
+
+        for row, line in enumerate(rows):
+            for col, ch in enumerate(line):
+                x, y = col * TILE, row * TILE
+                if ch == "#":
+                    self.tiles.append(pygame.Rect(x, y, TILE, TILE))
+                elif ch == "P":
+                    self.phase_tiles.append(pygame.Rect(x + TILE // 3, y, TILE // 3, TILE))
+                elif ch == "G":
+                    self.goal = pygame.Rect(x + 10, y, TILE - 20, TILE)
+                elif ch == "S":
+                    self.spawn = (x + 10, y + TILE - 44)
+                elif ch not in ". ":
+                    raise ValueError(f"unknown character '{ch}' in row {row + 1}")
+
+        if self.spawn is None:
+            raise ValueError("no S (start) found")
+        if self.goal is None:
+            raise ValueError("no G (goal) found")
 
 
-def sign(n):
-    """Returns -1, 0 or 1 depending on the sign of n."""
-    return (n > 0) - (n < 0)
+def scan_levels():
+    entries = []
+    if not os.path.isdir(LEVEL_DIR):
+        return entries
+    for filename in sorted(os.listdir(LEVEL_DIR)):
+        if not filename.lower().endswith(".txt"):
+            continue
+        try:
+            entries.append({"name": pretty_name(filename), "level": Level(filename), "error": None})
+        except (ValueError, OSError) as err:
+            entries.append({"name": pretty_name(filename), "level": None, "error": str(err)})
+    return entries
 
-
-# =====================================================================
-# 4. PLAYER
-# =====================================================================
 class Player:
-    def __init__(self, x, y):
-        self.spawn = (x, y)
-        self.rect = pygame.Rect(x, y, 30, 44)  # hitbox: used for collision and drawing
-        self.pos = pygame.Vector2(x, y)        # precise float position (Rects only store ints)
-        self.vel = pygame.Vector2(0, 0)        # velocity in px/second
+    def __init__(self, level):
+        self.level = level
+        self.rect = pygame.Rect(0, 0, 30, 44)
+        self.respawn()
+
+    def respawn(self):
+        self.x, self.y = self.level.spawn
+        self.rect.topleft = self.level.spawn
+        self.vel_x = 0.0
+        self.vel_y = 0.0
+        self.boost_x = 0.0
         self.on_ground = False
-
-        # Jump forgiveness timers (count down to 0)
-        self.coyote = 0.0
-        self.buffer = 0.0
-
-        # Rocket state
+        self.jumped = False
+        self.facing = 1
         self.rocket_cd = 0.0
-
-        # Dash state. "state" is a tiny state machine: "normal" or "dashing".
-        # While dashing, normal input/gravity are suspended.
-        self.state = "normal"
+        self.can_dash = True
+        self.dashing = False
         self.dash_timer = 0.0
-        self.dash_dir = pygame.Vector2(1, 0)
-        self.can_dash = True                   # refilled on landing
-        self.facing = 1                        # -1 left, 1 right; picks dash direction
+        self.dash_dir = 1
 
-    # ---------- which tiles block us right now? ----------
     def solids(self):
-        """Dashing ignores phase walls. Otherwise they are solid like normal tiles."""
-        return tiles if self.state == "dashing" else tiles + phase_tiles
+        if self.dashing:
+            return self.level.tiles
+        return self.level.tiles + self.level.phase_tiles
 
-    # ---------- one-off presses (jump buffer, rocket, dash) ----------
-    def handle_event(self, event):
-        # Jump press: start the buffer countdown. The jump itself happens in update.
-        if event.type == pygame.KEYDOWN and event.key in JUMP_KEYS:
-            self.buffer = JUMP_BUFFER
+    def handle_event(self, event, cam):
+        if event.type == pygame.KEYDOWN:
+            if event.key in JUMP_KEYS and self.on_ground and not self.dashing:
+                self.vel_y = -JUMP_SPEED
+                self.jumped = True
+            if event.key == pygame.K_LSHIFT and self.can_dash and not self.dashing:
+                self.dashing = True
+                self.dash_timer = DASH_TIME
+                self.dash_dir = self.facing
+                self.can_dash = False
+                self.boost_x = 0
 
-        # Rocket: launch opposite to the cursor. Not allowed mid-dash (design rule).
+        if event.type == pygame.KEYUP and event.key in JUMP_KEYS:
+            if self.jumped and self.vel_y < 0:
+                self.vel_y *= JUMP_CUT
+                self.jumped = False
+
         if (event.type == pygame.MOUSEBUTTONDOWN and event.button == 1
-                and self.rocket_cd <= 0 and self.state == "normal"):
-            aim = pygame.Vector2(event.pos) - pygame.Vector2(self.rect.center)
+                and self.rocket_cd <= 0 and not self.dashing):
+            player_on_screen = pygame.Vector2(self.rect.centerx - cam[0], self.rect.centery - cam[1])
+            aim = pygame.Vector2(event.pos) - player_on_screen
             if aim.length() > 0:
-                # SET velocity (not add) so the launch is consistent even if falling fast.
-                self.vel = -aim.normalize() * ROCKET_SPEED
+                push = -aim.normalize() * ROCKET_SPEED
+                self.boost_x = push.x
+                self.vel_y = push.y
                 self.rocket_cd = ROCKET_COOLDOWN
-                self.coyote = 0  # a rocket shouldn't also grant a free ground jump
+                self.jumped = False
 
-        # Dash: needs a charge. Starts the "dashing" state in the facing direction.
-        if (event.type == pygame.KEYDOWN and event.key == pygame.K_LSHIFT
-                and self.can_dash and self.state == "normal"):
-            self.state = "dashing"
-            self.dash_timer = DASH_TIME
-            self.dash_dir = pygame.Vector2(self.facing, 0)
-            self.can_dash = False
+    def inside_phase_wall(self):
+        return any(self.rect.colliderect(t) for t in self.level.phase_tiles)
 
-    # ---------- per-frame update ----------
     def update(self, dt):
         self.rocket_cd -= dt
 
-        if self.state == "dashing":
-            self.update_dash(dt)
-        else:
-            self.update_normal(dt)
-
-        # Movement runs in both states, one axis at a time (see move_x / move_y).
-        self.move_x(self.vel.x * dt)
-        self.move_y(self.vel.y * dt)
-
-        # Ground check: is a solid tile 1 px below our feet? Also recharges the dash.
-        probe = self.rect.move(0, 1)
-        self.on_ground = any(probe.colliderect(t) for t in self.solids())
-        if self.on_ground:
-            self.can_dash = True
-
-        # Fell off the world? Respawn.
-        if self.rect.top > HEIGHT + 200:
-            self.respawn()
-
-    def update_normal(self, dt):
         keys = pygame.key.get_pressed()
         direction = (keys[pygame.K_d] or keys[pygame.K_RIGHT]) - (keys[pygame.K_a] or keys[pygame.K_LEFT])
         if direction != 0:
             self.facing = direction
 
-        # --- horizontal movement ---
-        # "Boosted" means faster than MOVE_SPEED (e.g. after a rocket). We must NOT clamp
-        # a boosted speed back to MOVE_SPEED instantly, or the rocket's horizontal push vanishes.
-        was_under_cap = abs(self.vel.x) <= MOVE_SPEED
-        if direction != 0:
-            if was_under_cap or direction * self.vel.x < 0:
-                # Normal acceleration (or steering against a boost).
-                self.vel.x += direction * ACCEL * dt
-                if was_under_cap:
-                    self.vel.x = max(-MOVE_SPEED, min(MOVE_SPEED, self.vel.x))
-            else:
-                # Holding the same direction as a boost: let the extra speed bleed off gently.
-                self.vel.x -= sign(self.vel.x) * BOOST_DRAG * dt
-                self.vel.x = sign(self.vel.x) * max(MOVE_SPEED, abs(self.vel.x))
+        if self.dashing:
+            self.dash_timer -= dt
+            self.vel_x = self.dash_dir * DASH_SPEED
+            self.vel_y = 0
+            if self.dash_timer <= 0:
+                if not self.inside_phase_wall():
+                    self.dashing = False
+                elif self.dash_timer < -0.5:
+                    self.respawn()   # Incase the player is in a wall
+                    return
         else:
-            # No input: slow down toward 0 (less friction in the air).
-            slow = (FRICTION if self.on_ground else AIR_FRICTION) * dt
-            self.vel.x = 0 if abs(self.vel.x) <= slow else self.vel.x - sign(self.vel.x) * slow
-
-        # --- gravity ---
-        self.vel.y = min(self.vel.y + GRAVITY * dt, MAX_FALL)
-
-        # --- jump timers ---
-        self.coyote = COYOTE_TIME if self.on_ground else self.coyote - dt
-        self.buffer -= dt
-
-        # Jump if a press is buffered AND we're grounded (or within coyote time).
-        if self.buffer > 0 and self.coyote > 0:
-            self.vel.y = -JUMP_SPEED  # negative = up
-            self.buffer = 0
-            self.coyote = 0
-
-        # Variable jump height: releasing the key while rising cuts upward speed.
-        # (Skipped right after a rocket so the rocket isn't cancelled by "no key held".)
-        jump_held = any(keys[k] for k in JUMP_KEYS)
-        rocketing = self.rocket_cd > ROCKET_COOLDOWN - 0.25
-        if not jump_held and self.vel.y < 0 and not rocketing:
-            self.vel.y *= JUMP_CUT ** (dt * 60)
-
-    def update_dash(self, dt):
-        self.dash_timer -= dt
-        self.vel = self.dash_dir * DASH_SPEED  # fixed velocity: no gravity, no steering
-
-        if self.dash_timer <= 0:
-            # Don't end the dash while embedded in a phase wall, or collision would
-            # snap us somewhere odd. Extend slightly until we're clear.
-            if any(self.rect.colliderect(t) for t in phase_tiles):
-                self.dash_timer = 0.02
+            drag = (GROUND_DRAG if self.on_ground else AIR_DRAG) * dt
+            if abs(self.boost_x) <= drag:
+                self.boost_x = 0
             else:
-                self.state = "normal"
-                self.vel.x = self.facing * MOVE_SPEED  # keep a little momentum
-                self.vel.y = 0
+                self.boost_x -= math.copysign(drag, self.boost_x)
 
-    # ---------- collision: one axis at a time ----------
+            self.vel_x = direction * MOVE_SPEED + self.boost_x
+            self.vel_y = min(self.vel_y + GRAVITY * dt, MAX_FALL)
+            if self.vel_y >= 0:
+                self.jumped = False
+
+        self.move_x(self.vel_x * dt)
+        self.move_y(self.vel_y * dt)
+
+        probe = self.rect.move(0, 1)
+        self.on_ground = any(probe.colliderect(t) for t in self.solids())
+        if self.on_ground and not self.dashing:
+            self.can_dash = True
+
+        if self.rect.top > self.level.height + 200:
+            self.respawn()
+
     def move_x(self, dx):
-        self.pos.x += dx
-        self.rect.x = round(self.pos.x)
+        self.x += dx
+        self.rect.x = round(self.x)
         for tile in self.solids():
             if self.rect.colliderect(tile):
                 if dx > 0:
-                    self.rect.right = tile.left    # moving right: stop at tile's left edge
+                    self.rect.right = tile.left
                 elif dx < 0:
-                    self.rect.left = tile.right    # moving left: stop at tile's right edge
-                self.pos.x = self.rect.x
-                self.vel.x = 0
-        # Level edges act as walls.
-        if self.rect.left < 0 or self.rect.right > LEVEL_W:
-            self.rect.left = max(0, min(self.rect.left, LEVEL_W - self.rect.width))
-            self.pos.x = self.rect.x
-            self.vel.x = 0
+                    self.rect.left = tile.right
+                self.x = self.rect.x
+                self.boost_x = 0
+        if self.rect.left < 0 or self.rect.right > self.level.width:
+            self.rect.left = max(0, min(self.rect.left, self.level.width - self.rect.width))
+            self.x = self.rect.x
+            self.boost_x = 0
 
     def move_y(self, dy):
-        self.pos.y += dy
-        self.rect.y = round(self.pos.y)
+        self.y += dy
+        self.rect.y = round(self.y)
         for tile in self.solids():
             if self.rect.colliderect(tile):
                 if dy > 0:
-                    self.rect.bottom = tile.top    # falling: land on top
+                    self.rect.bottom = tile.top
                 elif dy < 0:
-                    self.rect.top = tile.bottom    # rising: bump head
-                self.pos.y = self.rect.y
-                self.vel.y = 0
+                    self.rect.top = tile.bottom
+                self.y = self.rect.y
+                self.vel_y = 0
 
-    def respawn(self):
-        self.pos.update(self.spawn)
-        self.rect.topleft = self.spawn
-        self.vel.update(0, 0)
-        self.state = "normal"
+    def draw(self, surface, cam):
+        color = (120, 200, 255) if self.dashing else GOLD
+        pygame.draw.rect(surface, color, self.rect.move(-cam[0], -cam[1]))
 
-    def draw(self, surface):
-        # Colour hints at state: blue while dashing, yellow otherwise.
-        color = (120, 200, 255) if self.state == "dashing" else (242, 193, 78)
-        pygame.draw.rect(surface, color, self.rect)
+def draw_text(text, y, color=INK, f=None):
+    """Draws text horizontally centred on the screen."""
+    surf = (f or font).render(text, True, color)
+    screen.blit(surf, surf.get_rect(center=(WIDTH // 2, y)))
+
+def get_camera(level, player):
+    cam_x = player.rect.centerx - WIDTH // 2
+    cam_y = player.rect.centery - HEIGHT // 2
+    cam_x = max(0, min(cam_x, level.width - WIDTH))
+    cam_y = max(0, min(cam_y, level.height - HEIGHT))
+    return cam_x, cam_y
+
+def draw_level(level, player, cam, show_aim):
+    cx, cy = cam
+    screen.fill(SKY)
+    for t in level.tiles:
+        r = t.move(-cx, -cy)
+        pygame.draw.rect(screen, (47, 74, 58), r)
+        pygame.draw.rect(screen, (34, 58, 44), r, 1)
+    for t in level.phase_tiles:
+        pygame.draw.rect(screen, (170, 110, 220), t.move(-cx, -cy))
+    pygame.draw.rect(screen, (230, 70, 70), level.goal.move(-cx, -cy))
+    player.draw(screen, cam)
+    if show_aim and player.rocket_cd <= 0:
+        start = (player.rect.centerx - cx, player.rect.centery - cy)
+        pygame.draw.line(screen, WHITE, start, pygame.mouse.get_pos(), 1)
+
+def draw_hud(level, player, run_time):
+    hud = (f"{level.name}   Time {run_time:5.2f}s   Dash {'ready' if player.can_dash else '--'}"
+           f"   Rocket {'ready' if player.rocket_cd <= 0 else '--'}")
+    screen.blit(font.render(hud, True, INK), (10, 10))
+
+def dim_screen():
+    overlay = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
+    overlay.fill((0, 0, 0, 150))
+    screen.blit(overlay, (0, 0))
 
 
-# =====================================================================
-# 5. GAME LOOP
-# =====================================================================
-def new_run():
-    """Returns a fresh player, a zeroed timer, and won=False."""
-    return Player(60, 300), 0.0, False
+def draw_menu(entries, selected, best_times):
+    screen.fill(SKY)
+    draw_text("LEVEL SELECT", 60, INK, big_font)
 
+    if not entries:
+        draw_text("No levels found.", 200, RED)
+        draw_text("Put .txt level files in the 'levels' folder next to game.py", 235, INK, small_font)
+    else:
+        visible = 6
+        first = max(0, min(selected - visible // 2, len(entries) - visible))
+        for i in range(first, min(first + visible, len(entries))):
+            entry = entries[i]
+            y = 130 + (i - first) * 38
+            if i == selected:
+                pygame.draw.rect(screen, (255, 255, 255), (150, y - 17, WIDTH - 300, 34), border_radius=6)
+            color = RED if entry["error"] else INK
+            name = entry["name"] + ("  (broken)" if entry["error"] else "")
+            screen.blit(font.render(name, True, color), (170, y - 9))
+            best = best_times.get(entry["name"])
+            if best is not None:
+                label = font.render(f"best {best:.2f}s", True, INK)
+                screen.blit(label, (WIDTH - 170 - label.get_width(), y - 9))
+        if entries[selected]["error"]:
+            draw_text("Problem: " + entries[selected]["error"], 372, RED, small_font)
 
-player, run_time, won = new_run()
+    draw_text("W/S or Up/Down: choose     Enter/Space: play     Esc: quit", 410, INK, small_font)
 
-while True:
-    # dt = seconds since last frame. Clamped so a lag spike can't tunnel us through floors.
-    dt = min(clock.tick(FPS) / 1000, 1 / 30)
+def quit_game():
+    pygame.quit()
+    sys.exit()
 
-    for event in pygame.event.get():
-        if event.type == pygame.QUIT:
-            pygame.quit()
-            sys.exit()
-        if event.type == pygame.KEYDOWN and event.key == pygame.K_r:
-            player, run_time, won = new_run()
-        if not won:
-            player.handle_event(event)
+def main():
+    state = "menu"
+    entries = scan_levels()
+    selected = 0
+    current = 0
+    best_times = {}
+    player = None
+    run_time = 0.0
+    new_best = False
 
-    if not won:
-        player.update(dt)
-        run_time += dt
-        if player.rect.colliderect(goal):
-            won = True
+    def start(index):
+        return Player(entries[index]["level"]), 0.0
 
-    # ---------- draw ----------
-    screen.fill((127, 178, 229))
-    for t in tiles:
-        pygame.draw.rect(screen, (47, 74, 58), t)
-        pygame.draw.rect(screen, (34, 58, 44), t, 1)
-    for t in phase_tiles:
-        pygame.draw.rect(screen, (170, 110, 220), t)
-    pygame.draw.rect(screen, (230, 70, 70), goal)  # the flag
-    player.draw(screen)
+    while True:
+        dt = min(clock.tick(FPS) / 1000, 1 / 30)
+        camera = get_camera(player.level, player) if state != "menu" else (0, 0)
 
-    # Aim line shows where the rocket will point. The launch goes the opposite way.
-    if player.rocket_cd <= 0:
-        pygame.draw.line(screen, (255, 255, 255), player.rect.center, pygame.mouse.get_pos(), 1)
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                quit_game()
+            is_key = event.type == pygame.KEYDOWN
 
-    hud = f"Time {run_time:5.2f}s   Dash {'ready' if player.can_dash else '--'}   Rocket {'ready' if player.rocket_cd <= 0 else '--'}"
-    screen.blit(font.render(hud, True, (20, 25, 40)), (10, 10))
-    if won:
-        msg = font.render(f"Finished in {run_time:.2f}s. Press R to restart.", True, (20, 25, 40))
-        screen.blit(msg, (WIDTH // 2 - msg.get_width() // 2, HEIGHT // 2 - 60))
+            if state == "menu":
+                if is_key and entries:
+                    if event.key in (pygame.K_UP, pygame.K_w):
+                        selected = (selected - 1) % len(entries)
+                    elif event.key in (pygame.K_DOWN, pygame.K_s):
+                        selected = (selected + 1) % len(entries)
+                    elif event.key in (pygame.K_RETURN, pygame.K_SPACE):
+                        if entries[selected]["level"] is not None:
+                            current = selected
+                            player, run_time = start(current)
+                            state = "playing"
+                if is_key and event.key == pygame.K_ESCAPE:
+                    quit_game()
 
-    pygame.display.flip()
+            elif state == "playing":
+                if is_key and event.key in (pygame.K_ESCAPE, pygame.K_p):
+                    state = "paused"
+                elif is_key and event.key == pygame.K_r:
+                    player, run_time = start(current)
+                else:
+                    player.handle_event(event, camera)
+
+            elif state == "paused":
+                if is_key and event.key in (pygame.K_ESCAPE, pygame.K_p):
+                    state = "playing"
+                elif is_key and event.key == pygame.K_r:
+                    player, run_time = start(current)
+                    state = "playing"
+                elif is_key and event.key == pygame.K_m:
+                    entries = scan_levels()
+                    selected = min(current, max(0, len(entries) - 1))
+                    state = "menu"
+
+            elif state == "won":
+                if is_key and event.key == pygame.K_r:
+                    player, run_time = start(current)
+                    state = "playing"
+                elif is_key and event.key == pygame.K_n:
+                    nxt = next((i for i in range(current + 1, len(entries))
+                                if entries[i]["level"] is not None), None)
+                    if nxt is not None:
+                        current = nxt
+                        player, run_time = start(current)
+                        state = "playing"
+                elif is_key and event.key in (pygame.K_m, pygame.K_ESCAPE):
+                    entries = scan_levels()
+                    selected = min(current, max(0, len(entries) - 1))
+                    state = "menu"
+
+        if state == "playing":
+            player.update(dt)
+            run_time += dt
+            if player.rect.colliderect(entries[current]["level"].goal):
+                name = entries[current]["name"]
+                new_best = name not in best_times or run_time < best_times[name]
+                if new_best:
+                    best_times[name] = run_time
+                state = "won"
+
+        if state == "menu":
+            draw_menu(entries, selected, best_times)
+        else:
+            level = entries[current]["level"]
+            camera = get_camera(level, player)
+            draw_level(level, player, camera, show_aim=(state == "playing"))
+            draw_hud(level, player, run_time)
+            if state == "paused":
+                dim_screen()
+                draw_text("PAUSED", 150, WHITE, big_font)
+                draw_text("Esc / P: resume     R: restart     M: level select", 220, WHITE)
+            elif state == "won":
+                dim_screen()
+                draw_text("LEVEL COMPLETE!", 140, WHITE, big_font)
+                draw_text(f"Time: {run_time:.2f}s" + ("   (new best!)" if new_best else ""), 200, WHITE)
+                draw_text("N: next level     R: retry     M / Esc: level select", 250, WHITE)
+
+        pygame.display.flip()
+
+if __name__ == "__main__":
+    main()
