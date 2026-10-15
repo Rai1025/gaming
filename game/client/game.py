@@ -11,6 +11,9 @@ import math
 import os
 import sys
 import pygame
+import json
+import threading
+import urllib.request
 
 # General setup
 pygame.init()
@@ -44,6 +47,20 @@ INK = (20, 25, 40)
 WHITE = (255, 255, 255)
 RED = (200, 50, 50)
 GOLD = (242, 193, 78)
+
+API_URL = "http://localhost:5000/api/scores"
+# Submit score meant to allow the game to work when the api is offline and prevent freezing due to it
+def submit_score(username, level_name, time_sec):
+    def send():
+        try:
+            body = json.dumps({"username": username, "level": level_name,
+                               "time": round(time_sec, 2)}).encode("utf-8")
+            req = urllib.request.Request(API_URL, data=body,
+                                         headers={"Content-Type": "application/json"})
+            urllib.request.urlopen(req, timeout=3)
+        except Exception as err:
+            print("Could not save score:", err)
+    threading.Thread(target=send, daemon=True).start()
 
 # Levels loaded from a separate file
 def pretty_name(filename):
@@ -268,6 +285,12 @@ def dim_screen():
     overlay.fill((0, 0, 0, 150))
     screen.blit(overlay, (0, 0))
 
+def draw_name_screen(username):
+    screen.fill(SKY)
+    draw_text("ENTER YOUR NAME", 120, INK, big_font)
+    pygame.draw.rect(screen, WHITE, (250, 200, 300, 50), border_radius=6)
+    draw_text(username + "|", 225, INK)
+    draw_text("Type your name, then press Enter", 300, INK, small_font)
 
 def draw_menu(entries, selected, best_times):
     screen.fill(SKY)
@@ -301,7 +324,8 @@ def quit_game():
     sys.exit()
 
 def main():
-    state = "menu"
+    state = "name"
+    username = ""
     entries = scan_levels()
     selected = 0
     current = 0
@@ -315,14 +339,25 @@ def main():
 
     while True:
         dt = min(clock.tick(FPS) / 1000, 1 / 30)
-        camera = get_camera(player.level, player) if state != "menu" else (0, 0)
+        camera = get_camera(player.level, player) if state not in ("menu", "name") else (0, 0)
 
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
                 quit_game()
             is_key = event.type == pygame.KEYDOWN
+            if state == "name":
+                if is_key:
+                    if event.key == pygame.K_ESCAPE:
+                        quit_game()
+                    elif event.key == pygame.K_RETURN and username.strip():
+                        username = username.strip()
+                        state = "menu"
+                    elif event.key == pygame.K_BACKSPACE:
+                        username = username[:-1]
+                    elif event.unicode.isprintable() and event.unicode and len(username) < 15:
+                        username += event.unicode
 
-            if state == "menu":
+            elif state == "menu":
                 if is_key and entries:
                     if event.key in (pygame.K_UP, pygame.K_w):
                         selected = (selected - 1) % len(entries)
@@ -379,9 +414,12 @@ def main():
                 new_best = name not in best_times or run_time < best_times[name]
                 if new_best:
                     best_times[name] = run_time
+                submit_score(username, name, run_time)
                 state = "won"
 
-        if state == "menu":
+        if state == "name":
+            draw_name_screen(username)
+        elif state == "menu":
             draw_menu(entries, selected, best_times)
         else:
             level = entries[current]["level"]

@@ -4,15 +4,58 @@
   <meta charset="UTF-8">
   <title>Explosive Dash</title>
   <link rel="stylesheet" href="style.css">
-  </head>
+</head>
 <body>
   <h1 id="TOP5">TOP 5 Times</h1>
+
+  <label for="level">Level:</label>
+  <select id="level"></select>
+
   <table>
-    <tr><th>Place</th><th>Name</th><th>Time</th></tr>
-    <tr><td> 1. </td><td> - </td><td> - </td></tr>
-    <tr><td> 2. </td><td> - </td><td> - </td></tr>
-    <tr><td> 3. </td><td> - </td><td> - </td></tr>
+    <thead><tr><th>Place</th><th>Name</th><th>Time</th><th>Level</th></tr></thead>
+    <tbody id="scores"></tbody>
   </table>
+  <p id="msg"></p>
   <a href="rules.html">Game rules.</a>
+
+  <script>
+    const API = "http://localhost:5000/api";
+    const select = document.getElementById("level");
+    const tbody = document.getElementById("scores");
+    const msg = document.getElementById("msg");
+
+    async function loadLevels() {
+      try {
+        const levels = await (await fetch(API + "/levels")).json();
+        select.innerHTML = "";
+        for (const l of levels) {
+          const opt = document.createElement("option");
+          opt.value = opt.textContent = l;   // textContent = safe against HTML injection
+          select.appendChild(opt);
+        }
+        if (levels.length) loadScores(); else msg.textContent = "No scores yet.";
+      } catch (e) {
+        msg.textContent = "Cannot reach the API. Is api/app.py running?";
+      }
+    }
+
+    async function loadScores() {
+      const url = API + "/scores?level=" + encodeURIComponent(select.value);
+      const scores = await (await fetch(url)).json();
+      tbody.innerHTML = "";
+      scores.forEach((s, i) => {
+        const tr = document.createElement("tr");
+        [(i + 1) + ".", s.username, s.time_sec.toFixed(2) + " s", s.level].forEach(v => {
+          const td = document.createElement("td");
+          td.textContent = v;
+          tr.appendChild(td);
+        });
+        tbody.appendChild(tr);
+      });
+    }
+
+    select.addEventListener("change", loadScores);
+    loadLevels();
+  </script>
 </body>
 </html>
