@@ -1,4 +1,3 @@
-
 #Controls
 #W/S or Up/Down = choose   Enter/Space = play   Esc = quit
 #A/D or arrows = move   Space/W/Up = jump
@@ -35,7 +34,6 @@ JUMP_CUT = 0.45
 GROUND_DRAG = 2400
 AIR_DRAG = 500
 ROCKET_SPEED = 750
-ROCKET_COOLDOWN = 0.5
 DASH_SPEED = 700
 DASH_TIME = 0.18
 JUMP_KEYS = (pygame.K_SPACE, pygame.K_w, pygame.K_UP)
@@ -114,7 +112,7 @@ class Player:
         self.on_ground = False
         self.jumped = False
         self.facing = 1
-        self.rocket_cd = 0.0
+        self.can_rocket = True
         self.can_dash = True
         self.dashing = False
         self.dash_timer = 0.0
@@ -143,21 +141,25 @@ class Player:
                 self.jumped = False
 
         if (event.type == pygame.MOUSEBUTTONDOWN and event.button == 1
-                and self.rocket_cd <= 0 and not self.dashing):
+                and self.can_rocket and not self.dashing):
             player_on_screen = pygame.Vector2(self.rect.centerx - cam[0], self.rect.centery - cam[1])
             aim = pygame.Vector2(event.pos) - player_on_screen
             if aim.length() > 0:
                 push = -aim.normalize() * ROCKET_SPEED
                 self.boost_x = push.x
                 self.vel_y = push.y
-                self.rocket_cd = ROCKET_COOLDOWN
+                self.can_rocket = False
                 self.jumped = False
 
     def inside_phase_wall(self):
         return any(self.rect.colliderect(t) for t in self.level.phase_tiles)
 
     def update(self, dt):
-        self.rocket_cd -= dt
+        probe = self.rect.move(0, 1)
+        self.on_ground = any(probe.colliderect(t) for t in self.solids())
+        if self.on_ground and not self.dashing:
+                self.can_dash = True
+                self.can_rocket = True
 
         keys = pygame.key.get_pressed()
         direction = (keys[pygame.K_d] or keys[pygame.K_RIGHT]) - (keys[pygame.K_a] or keys[pygame.K_LEFT])
@@ -252,13 +254,13 @@ def draw_level(level, player, cam, show_aim):
         pygame.draw.rect(screen, (170, 110, 220), t.move(-cx, -cy))
     pygame.draw.rect(screen, (230, 70, 70), level.goal.move(-cx, -cy))
     player.draw(screen, cam)
-    if show_aim and player.rocket_cd <= 0:
+    if show_aim and player.can_rocket:
         start = (player.rect.centerx - cx, player.rect.centery - cy)
         pygame.draw.line(screen, WHITE, start, pygame.mouse.get_pos(), 1)
 
 def draw_hud(level, player, run_time):
     hud = (f"{level.name}   Time {run_time:5.2f}s   Dash {'ready' if player.can_dash else '--'}"
-           f"   Rocket {'ready' if player.rocket_cd <= 0 else '--'}")
+           f"   Rocket {'ready' if player.can_rocket else '--'}")
     screen.blit(font.render(hud, True, INK), (10, 10))
 
 def dim_screen():
