@@ -76,5 +76,16 @@ def get_scores():
         ).fetchall()
     return jsonify([dict(r) for r in rows])
 
+@app.route("/docs")
+def docs():
+    return """
+    <h1>Explosive Dash API</h1>
+    <ul>
+      <li><b>GET /api/levels</b> - list of levels</li>
+      <li><b>GET /api/scores?level=NAME</b> - top 5 times for a level</li>
+      <li><b>POST /api/scores</b> - JSON: {"username", "level", "time"}</li>
+    </ul>
+    """
+
 if __name__ == "__main__":
     app.run(port=5000, debug=True)
