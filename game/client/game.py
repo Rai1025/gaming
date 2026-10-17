@@ -21,7 +21,7 @@ WIDTH, HEIGHT = 800, 450
 TILE = 50
 FPS = 60
 screen = pygame.display.set_mode((WIDTH, HEIGHT))
-pygame.display.set_caption("Pygame Platformer")
+pygame.display.set_caption("Explosive Dash")
 clock = pygame.time.Clock()
 font = pygame.font.SysFont(None, 28)
 small_font = pygame.font.SysFont(None, 22)
